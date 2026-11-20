@@ -1,0 +1,6 @@
+<Solution>
+  <Project Path="src/PeopleFirstApprovals/PeopleFirstApprovals.csproj" />
+  <Project Path="src/PeopleFirstApprovals.Console/PeopleFirstApprovals.Console.csproj" />
+
+  <Project Path="tests/PeopleFirstApprovals.Tests/PeopleFirstApprovals.Tests.csproj" />
+</Solution>

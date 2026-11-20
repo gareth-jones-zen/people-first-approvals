@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <ProjectReference Include="$(BackgroundToolsLib)src\WinBackground\WinBackground.csproj" />
+    <ProjectReference Include="$(BackgroundToolsLib)src\PyCompat\PyCompat.csproj" />
+    <ProjectReference Include="$(BackgroundToolsLib)src\PeopleFirstClient\PeopleFirstClient.csproj" />
+    <ProjectReference Include="$(BackgroundToolsLib)src\ReviewQueue\ReviewQueue.csproj" />
+    <PackageReference Include="Tomlyn" Version="2.11.1" />
+  </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="PeopleFirstApprovals.Tests" />
+  </ItemGroup>
+</Project>
