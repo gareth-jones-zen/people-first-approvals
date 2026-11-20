@@ -241,9 +241,15 @@ public class RunTests
             return JsonDocument.Parse("{}").RootElement.Clone();
         };
         Assert.Equal(0, Cli.Run(["--config", box.Settings, "approve", Fixture.Notification], box.Host()));
-        var (path, body) = Assert.Single(pf.Posts);
-        Assert.Equal($"{Fixture.CashPath}/approved", path);
-        Assert.Equal(247.52m, body["data"]!["cashClaim"]!["cash"]!.GetValue<decimal>());
+        var (path, body, headers) = Assert.Single(pf.Posts);
+        Assert.Equal($"{Fixture.CashPath}/approved?annotate=t", path);
+        // As People First's web app sends it: the record's fields under its type, its id added, no links, no "data".
+        var sent = Assert.Single(body.AsObject());
+        Assert.Equal("cashClaim", sent.Key);
+        Assert.Equal(247.52m, sent.Value!["cash"]!.GetValue<decimal>());
+        Assert.Equal(Fixture.ClaimId, sent.Value!["id"]!.ToString());
+        Assert.Null(sent.Value!["_links"]);
+        Assert.Equal("W/\"etag-1\"", headers!["If-Match"]);
         Assert.Contains("Approved: the Long Service Awards claim for Alex Example, £247.52.", box.Out.ToString());
         Assert.Empty(box.ReviewItems());
         Assert.Empty(Directory.GetDirectories(box.Config.Documents));
@@ -275,9 +281,11 @@ public class RunTests
         using var box = new Sandbox();
         var pf = Fixture.LongService();
         box.PeopleFirst = pf;
-        pf.OnPost = (_, _) => throw new PeopleFirstException("People First answered 400") { Status = 400 };
+        pf.OnPost = (_, _) => throw new PeopleFirstException("People First answered 412 to POST") { Status = 412 };
         Assert.Equal(1, Cli.Run(["--config", box.Settings, "approve", Fixture.Notification], box.Host()));
         Assert.Null(box.State()["claims"]![Fixture.ClaimId]!["sending"]);
+        Assert.Null(box.State()["claims"]![Fixture.ClaimId]!["sent_unconfirmed"]);
+        Assert.Contains("nothing happened; it can be tried again", box.Out.ToString());
         Assert.Equal(1, Cli.Run(["--config", box.Settings, "approve", Fixture.Notification], box.Host()));
         Assert.Equal(2, pf.Posts.Count);
     }

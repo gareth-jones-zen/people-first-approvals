@@ -11,7 +11,8 @@ internal sealed class FakePeopleFirst : IPeopleFirst
 {
     public Dictionary<string, string> Json { get; } = [];
     public Dictionary<string, byte[]> Files { get; } = [];
-    public List<(string Path, JsonNode Body)> Posts { get; } = [];
+    public List<(string Path, JsonNode Body, IReadOnlyDictionary<string, string>? Headers)> Posts { get; } = [];
+    public string? ETag { get; set; } = "W/\"etag-1\"";
     public Func<string, JsonNode, JsonElement>? OnPost { get; set; }
     public List<string> Gets { get; } = [];
 
@@ -25,12 +26,14 @@ internal sealed class FakePeopleFirst : IPeopleFirst
         return doc.RootElement.Clone();
     }
 
+    public (JsonElement Body, string? ETag) GetWithEtag(string path) => (Get(path), ETag);
+
     public byte[] GetFile(string path, string accept) =>
         Files.TryGetValue(Claims.Rooted(path), out var bytes) ? bytes : throw new PeopleFirstException("404") { Status = 404 };
 
-    public JsonElement Post(string path, JsonNode body)
+    public JsonElement Post(string path, JsonNode body, IReadOnlyDictionary<string, string>? headers)
     {
-        Posts.Add((Claims.Rooted(path), body.DeepClone()));
+        Posts.Add((Claims.Rooted(path), body.DeepClone(), headers));
         if (OnPost is null)
             throw new InvalidOperationException("no POST expected");
         return OnPost(path, body);

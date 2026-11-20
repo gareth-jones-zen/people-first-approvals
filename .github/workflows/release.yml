@@ -12,7 +12,7 @@ permissions:
 
 # The shared libraries come from background-tools-lib, checked out beside this repo as the build expects (see build.yml).
 env:
-  BACKGROUND_TOOLS_LIB_REF: a2e6909a8ba3412c02c4569ea1a3651cfa115b4d   # pinned: a release builds against one known library commit; bump deliberately
+  BACKGROUND_TOOLS_LIB_REF: b4449836f8fb6494e0b7505b1989018a9e7bbcaf   # pinned: a release builds against one known library commit; bump deliberately
 
 jobs:
   release:

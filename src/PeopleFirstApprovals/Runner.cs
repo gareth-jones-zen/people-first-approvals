@@ -214,10 +214,19 @@ public static partial class Runner
             host.Out.WriteLine($"People First doesn't offer you {verb} on the {who}.");
             return 1;
         }
-        var body = claim.TypedData.DeepClone();
+        // Read the record again just before writing: People First wants the ETag of this read (If-Match).
+        var (typedRoot, etag) = pf.GetWithEtag(claim.TypedPath);
+        if (Claims.Whole(Claims.Record(typedRoot), "approvalState") is var latest && latest != Claims.AwaitingApproval)
+        {
+            host.Out.WriteLine($"The {who} has just become {Claims.StateName(latest)}: nothing sent.");
+            if (!dryRun)
+                Decided(config, state, claim.ClaimId, $"{Claims.StateName(latest)} in People First", host, log);
+            return 0;
+        }
+        var (url, body, headers) = Claims.Write(Claims.MetaLink(typedRoot, approve ? "approve" : "reject") ?? link, typedRoot, etag, claim.ClaimId);
         if (dryRun)
         {
-            host.Out.WriteLine($"Would {verb} the {who} (POST {link.Split('?')[0]}).");
+            host.Out.WriteLine($"Would {verb} the {who} (POST {url.Split('?')[0]}, {(etag is null ? "no ETag" : "If-Match the record's ETag")}).");
             return 0;
         }
         var stateEntry = State.Claims(state)[claim.ClaimId] as JsonObject ?? new JsonObject();
@@ -231,7 +240,7 @@ public static partial class Runner
         string? problem = null;
         try
         {
-            pf.Post(link, new JsonObject { ["data"] = body });
+            pf.Post(url, body, headers);
         }
         catch (PeopleFirstDeliveryUnknownException error)
         {
@@ -241,7 +250,7 @@ public static partial class Runner
         {
             stateEntry.Remove("sending");
             State.Save(config, state);
-            host.Out.WriteLine($"People First didn't {verb} the {who}: {error.Message}");
+            host.Out.WriteLine($"People First didn't {verb} the {who} (nothing happened; it can be tried again): {error.Message}");
             log($"claim {claim.ClaimId}: {verb} refused or never sent");
             return 1;
         }

@@ -9,8 +9,10 @@ namespace PeopleFirstApprovals;
 public interface IPeopleFirst : IDisposable
 {
     JsonElement Get(string path);
+    /// <summary>A GET, with the record's ETag (null if none): a write to it must send it back as If-Match.</summary>
+    (JsonElement Body, string? ETag) GetWithEtag(string path);
     byte[] GetFile(string path, string accept);
-    JsonElement Post(string path, JsonNode body);
+    JsonElement Post(string path, JsonNode body, IReadOnlyDictionary<string, string>? headers);
 }
 
 /// <summary>PeopleFirstClient's Api, signed in.</summary>
@@ -18,7 +20,9 @@ public sealed class PeopleFirstApi(Api api) : IPeopleFirst
 {
     public JsonElement Get(string path) => api.GetAsync(Claims.Rooted(path)).GetAwaiter().GetResult();
     public byte[] GetFile(string path, string accept) => api.GetBytesAsync(Claims.Rooted(path), accept).GetAwaiter().GetResult();
-    public JsonElement Post(string path, JsonNode body) => api.PostAsync(Claims.Rooted(path), body).GetAwaiter().GetResult();
+    public (JsonElement Body, string? ETag) GetWithEtag(string path) => api.GetWithEtagAsync(Claims.Rooted(path)).GetAwaiter().GetResult();
+    public JsonElement Post(string path, JsonNode body, IReadOnlyDictionary<string, string>? headers) =>
+        api.PostAsync(Claims.Rooted(path), body, headers).GetAwaiter().GetResult();
     public void Dispose() => api.Dispose();
 }
 
@@ -309,6 +313,27 @@ public static class Claims
                 if (FindWith(item, name) is { } found)
                     return found;
         return null;
+    }
+
+    /// <summary>What approving or rejecting sends, as People First's web app builds it for a record in this (older)
+    /// shape: the record's own fields (its links left out) and its id, under the record's type, with no "data" around
+    /// it; the URL gets annotate=t; and If-Match carries the ETag of the GET it was read from (without it, 412).</summary>
+    public static (string Url, JsonObject Body, Dictionary<string, string> Headers) Write(string link, JsonElement typedRoot, string? etag, string claimId)
+    {
+        var data = Prop(typedRoot, "data") ?? throw new PeopleFirstException("People First's reply has no data.");
+        var (type, record) = data.EnumerateObject().Where(p => p.Value.ValueKind == JsonValueKind.Object).Select(p => (p.Name, p.Value)).FirstOrDefault();
+        if (type is null)
+            throw new PeopleFirstException("People First's reply has no record in its data.");
+        var fields = JsonNode.Parse(record.GetRawText())!.AsObject();
+        fields.Remove("_links");
+        fields.Remove("links");
+        fields.Remove("meta");
+        fields["id"] = claimId;
+        var url = link.Contains("annotate=", StringComparison.Ordinal) ? link : link + (link.Contains('?') ? "&" : "?") + "annotate=t";
+        var headers = new Dictionary<string, string>();
+        if (etag is not null)
+            headers["If-Match"] = etag;
+        return (url, new JsonObject { [type] = fields }, headers);
     }
 
     /// <summary>The claim's current approval state, read again (after a write, or to see it's been decided).</summary>
