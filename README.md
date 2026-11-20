@@ -61,7 +61,9 @@ never an address or bank details**, though the receipt has them.
 ## Approving and rejecting
 
 `approve ID` or `reject ID` reads the claim first (already decided: nothing is sent), then does what People First's web
-app does: POSTs the claim back to its `approve` (or `reject`) link, once. **A write that may have reached People First
+app does: reads the claim again for its ETag, then POSTs the claim's fields (under its type, with its id; no links) to its
+`approve` (or `reject`) link with `annotate=t` and **`If-Match` set to that ETag**, once. Without If-Match People First
+refuses the write with 412 (fixed in 0.1.1). **A write that may have reached People First
 is never sent again:** "sending" is recorded before the POST; a timeout or a 5xx is read back, and if the claim doesn't
 read as decided it's recorded as sent but not confirmed (a `claim-unconfirmed` item), and a second `approve` refuses. A
 refusal (4xx) or a request that never left records nothing, so it can be tried again.
