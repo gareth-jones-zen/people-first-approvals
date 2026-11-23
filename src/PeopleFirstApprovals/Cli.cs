@@ -21,8 +21,9 @@ public sealed class CliHost
 }
 
 /// <summary>people-first-approvals: checks what People First asks you to approve (claims), raises each with a
-/// recommendation, and approves or rejects on your say-so. Exit codes: 0 done; 1 failed (or, for digest, raise the
-/// email); 2 settings, arguments or sign-in; 75 (digest) try again later.</summary>
+/// recommendation, and approves or rejects one on your say-so: approve and reject show what they would do, and do it
+/// only with --yes. Exit codes: 0 done (or shown); 1 failed (or, for digest, raise the email); 2 settings, arguments or
+/// sign-in; 75 (digest) try again later.</summary>
 public static class Cli
 {
     public const string Prog = "people-first-approvals";
@@ -33,22 +34,27 @@ public static class Cli
     public const string Help =
         Usage + "\n\n" +
         "people-first-approvals: checks the claims People First asks you to approve (long service awards, expenses,\n" +
-        "overtime), with a recommendation for each, and approves or rejects one when you say so. It never approves\n" +
-        "anything by itself.\n\n" +
+        "overtime), with a recommendation for each. It never approves or rejects anything by itself: approve and\n" +
+        "reject show what they would do, and do it only when you run them again with --yes.\n\n" +
         "    people-first-approvals check [NOTIFICATION ...]   check these notifications' claims and raise each for you;\n" +
-        "                                                     with none, re-read the claims still waiting (--dry-run)\n" +
+        "                                                      with none, re-read the claims still waiting (--dry-run)\n" +
         "    people-first-approvals show NOTIFICATION          check one and print it; raises and remembers nothing\n" +
-        "    people-first-approvals approve ID                 approve a claim (its notification or claim id; --dry-run)\n" +
-        "    people-first-approvals reject ID [--reason TEXT]  reject one (People First takes no reason: tell them yourself)\n" +
+        "    people-first-approvals approve ID [--yes]         show what approving a claim (its notification or claim id)\n" +
+        "                                                      would do; --yes approves it\n" +
+        "    people-first-approvals reject ID [--reason TEXT] [--yes]\n" +
+        "                                                      show what rejecting one would do; --yes rejects it (People\n" +
+        "                                                      First takes no reason: tell them yourself)\n" +
         "    people-first-approvals digest                     People First's daily email as JSON on standard input (a\n" +
-        "                                                     mail-triage handler): its claims checked, the rest passed on\n" +
+        "                                                      mail-triage handler): its claims checked, the rest passed on\n" +
         "    people-first-approvals tidy                       delete documents older than keep_days\n" +
         "    people-first-approvals sign-in                    sign in to People First in a window\n" +
         "    people-first-approvals config                     create the settings file (if missing) and say where it is\n\n" +
         "options:\n" +
         "  -h, --help       show this help message and exit\n" +
         "  --version        show program's version number and exit\n" +
-        "  --config CONFIG  settings file (default %APPDATA%\\people-first-approvals\\config.toml)\n";
+        "  --config CONFIG  settings file (default %APPDATA%\\people-first-approvals\\config.toml)\n" +
+        "  --yes            approve, reject: do it (without it they show what they would do and change nothing)\n" +
+        "  --dry-run        check: change nothing; approve, reject: the same as leaving out --yes\n";
 
     private static readonly string[] CommandNames = ["check", "show", "approve", "reject", "digest", "tidy", "sign-in", "config"];
 
@@ -61,6 +67,7 @@ public static class Cli
         public string Command = "";
         public List<string> Args = [];
         public bool DryRun;
+        public bool Yes;
         public string? Reason;
     }
 
@@ -124,7 +131,8 @@ public static class Cli
                 {
                     var state = State.Load(config);
                     using var pf = host.OpenPeopleFirst(config, log);
-                    return Runner.Decide(config, pf, options.Args[0], options.Command == "approve", options.Reason, options.DryRun, host, state, log);
+                    // Only --yes acts; without it (or with --dry-run, kept as another name for the preview) it's shown.
+                    return Runner.Decide(config, pf, options.Args[0], options.Command == "approve", options.Reason, preview: !options.Yes, host, state, log);
                 }
             }
         }
@@ -220,6 +228,8 @@ public static class Cli
             }
             if (arg == "--dry-run" && options.Command is "check" or "approve" or "reject")
                 options.DryRun = true;
+            else if (arg == "--yes" && options.Command is "approve" or "reject")
+                options.Yes = true;
             else if (arg == "--reason" && options.Command == "reject")
             {
                 if (++i >= argv.Count)
@@ -231,6 +241,8 @@ public static class Cli
             else
                 options.Args.Add(arg);
         }
+        if (options.Yes && options.DryRun)
+            throw new ArgumentsException("argument --yes: not allowed with argument --dry-run");
         var (min, max) = options.Command switch
         {
             "check" => (0, 50),

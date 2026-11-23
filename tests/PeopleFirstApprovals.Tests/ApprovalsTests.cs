@@ -240,7 +240,7 @@ public class RunTests
             pf.SetState(Claims.Approved);
             return JsonDocument.Parse("{}").RootElement.Clone();
         };
-        Assert.Equal(0, Cli.Run(["--config", box.Settings, "approve", Fixture.Notification], box.Host()));
+        Assert.Equal(0, Cli.Run(["--config", box.Settings, "approve", Fixture.Notification, "--yes"], box.Host()));
         var (path, body, headers) = Assert.Single(pf.Posts);
         Assert.Equal($"{Fixture.CashPath}/approved?annotate=t", path);
         // As People First's web app sends it: the record's fields under its type, its id added, no links, no "data".
@@ -256,7 +256,7 @@ public class RunTests
         Assert.Equal("approved here", box.State()["claims"]![Fixture.ClaimId]!["outcome"]!.ToString());
 
         // Asked again: already approved, nothing sent.
-        Assert.Equal(0, Cli.Run(["--config", box.Settings, "approve", Fixture.ClaimId], box.Host()));
+        Assert.Equal(0, Cli.Run(["--config", box.Settings, "approve", Fixture.ClaimId, "--yes"], box.Host()));
         Assert.Single(pf.Posts);
     }
 
@@ -267,10 +267,10 @@ public class RunTests
         var pf = Fixture.LongService();
         box.PeopleFirst = pf;
         pf.OnPost = (_, _) => throw new PeopleFirstDeliveryUnknownException("timed out");
-        Assert.Equal(1, Cli.Run(["--config", box.Settings, "reject", Fixture.Notification, "--reason", "not yet"], box.Host()));
+        Assert.Equal(1, Cli.Run(["--config", box.Settings, "reject", Fixture.Notification, "--reason", "not yet", "--yes"], box.Host()));
         Assert.Contains("Sent, but not confirmed", box.Out.ToString());
         Assert.Contains(box.ReviewItems(), i => i!["type"]!.ToString() == "claim-unconfirmed");
-        Assert.Equal(1, Cli.Run(["--config", box.Settings, "reject", Fixture.Notification], box.Host()));
+        Assert.Equal(1, Cli.Run(["--config", box.Settings, "reject", Fixture.Notification, "--yes"], box.Host()));
         Assert.Single(pf.Posts);
         Assert.Contains("never sent twice", box.Out.ToString());
     }
@@ -282,22 +282,124 @@ public class RunTests
         var pf = Fixture.LongService();
         box.PeopleFirst = pf;
         pf.OnPost = (_, _) => throw new PeopleFirstException("People First answered 412 to POST") { Status = 412 };
-        Assert.Equal(1, Cli.Run(["--config", box.Settings, "approve", Fixture.Notification], box.Host()));
+        Assert.Equal(1, Cli.Run(["--config", box.Settings, "approve", Fixture.Notification, "--yes"], box.Host()));
         Assert.Null(box.State()["claims"]![Fixture.ClaimId]!["sending"]);
         Assert.Null(box.State()["claims"]![Fixture.ClaimId]!["sent_unconfirmed"]);
         Assert.Contains("nothing happened; it can be tried again", box.Out.ToString());
-        Assert.Equal(1, Cli.Run(["--config", box.Settings, "approve", Fixture.Notification], box.Host()));
+        Assert.Equal(1, Cli.Run(["--config", box.Settings, "approve", Fixture.Notification, "--yes"], box.Host()));
         Assert.Equal(2, pf.Posts.Count);
     }
 
     [Fact]
-    public void A_dry_run_sends_nothing()
+    public void Approve_without_yes_shows_what_it_would_do_and_writes_nothing()
+    {
+        using var box = new Sandbox();
+        var pf = Fixture.LongService();
+        box.PeopleFirst = pf;
+        box.ReaderReplies();
+        Cli.Run(["--config", box.Settings, "check", Fixture.Notification], box.Host());
+        var stateBefore = File.ReadAllText(Path.Combine(box.Dir, "state.json"));
+        var itemsBefore = box.ReviewItems().ToJsonString();
+        box.Out.GetStringBuilder().Clear();
+        pf.OnPost = (_, _) => throw new InvalidOperationException("a preview must not POST");
+
+        Assert.Equal(0, Cli.Run(["--config", box.Settings, "approve", Fixture.Notification], box.Host()));
+        var shown = box.Out.ToString();
+        Assert.Contains("Would approve this claim:", shown);
+        Assert.Contains("Long Service Awards claim for Alex Example: £247.52, earned 19 Nov 2026", shown);
+        Assert.Contains("ok: Document: invoice 42", shown);
+        Assert.Contains("recommendation: Approve", shown);
+        Assert.Contains($"POST {Fixture.CashPath}/approved, If-Match the record's ETag", shown);
+        Assert.EndsWith("Nothing approved. Run again with --yes to approve it." + Environment.NewLine, shown);
+        Assert.Empty(pf.Posts);
+        Assert.Equal(stateBefore, File.ReadAllText(Path.Combine(box.Dir, "state.json")));
+        Assert.Equal(itemsBefore, box.ReviewItems().ToJsonString());
+        Assert.NotEmpty(Directory.GetDirectories(box.Config.Documents));   // the claim's still waiting: its receipt stays
+    }
+
+    [Fact]
+    public void Reject_without_yes_says_what_it_would_send_and_the_reason_is_yours_to_give()
+    {
+        using var box = new Sandbox();
+        var pf = Fixture.LongService();
+        box.PeopleFirst = pf;
+        box.ReaderReplies();
+        Assert.Equal(0, Cli.Run(["--config", box.Settings, "reject", Fixture.Notification, "--reason", "claimed twice"], box.Host()));
+        var shown = box.Out.ToString();
+        Assert.Contains("Would reject this claim:", shown);
+        Assert.Contains($"POST {Fixture.CashPath}/rejected", shown);
+        Assert.Contains("People First takes no reason, so none is sent with it: tell Alex Example yourself: claimed twice", shown);
+        Assert.Contains("Nothing rejected. Run again with --yes to reject it.", shown);
+        Assert.Empty(pf.Posts);
+        Assert.False(File.Exists(Path.Combine(box.Dir, "state.json")));   // never checked, so nothing remembered
+        Assert.Empty(box.ReviewItems());
+        Assert.Empty(Directory.GetDirectories(box.Config.Documents));     // the receipt read for the preview is gone
+    }
+
+    [Fact]
+    public void Dry_run_is_another_name_for_the_preview()
     {
         using var box = new Sandbox();
         box.PeopleFirst = Fixture.LongService();
         Assert.Equal(0, Cli.Run(["--config", box.Settings, "approve", Fixture.Notification, "--dry-run"], box.Host()));
-        Assert.Contains("Would approve", box.Out.ToString());
+        Assert.Contains("Would approve this claim:", box.Out.ToString());
+        Assert.Contains("Nothing approved. Run again with --yes to approve it.", box.Out.ToString());
         Assert.Empty(box.PeopleFirst.Posts);
+        Assert.Equal(0, Cli.Run(["--config", box.Settings, "reject", Fixture.Notification, "--dry-run"], box.Host()));
+        Assert.Contains("Nothing rejected.", box.Out.ToString());
+        Assert.Empty(box.PeopleFirst.Posts);
+    }
+
+    [Fact]
+    public void Yes_with_dry_run_is_refused_before_People_First_is_opened()
+    {
+        using var box = new Sandbox();
+        var pf = Fixture.LongService();
+        box.PeopleFirst = pf;
+        Assert.Equal(2, Cli.Run(["--config", box.Settings, "approve", Fixture.Notification, "--yes", "--dry-run"], box.Host()));
+        Assert.Equal(2, Cli.Run(["--config", box.Settings, "reject", Fixture.Notification, "--dry-run", "--yes"], box.Host()));
+        Assert.Contains("argument --yes: not allowed with argument --dry-run", box.Err.ToString());
+        Assert.Empty(pf.Gets);
+        Assert.Empty(pf.Posts);
+    }
+
+    [Fact]
+    public void Yes_is_only_for_approve_and_reject()
+    {
+        using var box = new Sandbox();
+        Assert.Equal(2, Cli.Run(["--config", box.Settings, "check", "--yes"], box.Host()));
+        Assert.Contains("unrecognized arguments: --yes", box.Err.ToString());
+    }
+
+    [Fact]
+    public void Yes_rejects_once()
+    {
+        using var box = new Sandbox();
+        var pf = Fixture.LongService();
+        box.PeopleFirst = pf;
+        pf.OnPost = (_, _) =>
+        {
+            pf.SetState(Claims.Rejected);
+            return JsonDocument.Parse("{}").RootElement.Clone();
+        };
+        Assert.Equal(0, Cli.Run(["--config", box.Settings, "reject", Fixture.Notification, "--reason", "claimed twice", "--yes"], box.Host()));
+        Assert.Equal($"{Fixture.CashPath}/rejected?annotate=t", Assert.Single(pf.Posts).Path);
+        Assert.Contains("Rejected: the Long Service Awards claim for Alex Example, £247.52.", box.Out.ToString());
+        Assert.Equal("rejected here", box.State()["claims"]![Fixture.ClaimId]!["outcome"]!.ToString());
+        Assert.Equal(0, Cli.Run(["--config", box.Settings, "reject", Fixture.Notification, "--yes"], box.Host()));
+        Assert.Single(pf.Posts);
+    }
+
+    [Fact]
+    public void The_help_says_approve_and_reject_act_only_with_yes()
+    {
+        using var box = new Sandbox();
+        Assert.Equal(0, Cli.Run(["--help"], box.Host()));
+        var help = box.Out.ToString();
+        Assert.Contains("people-first-approvals approve ID [--yes]", help);
+        Assert.Contains("people-first-approvals reject ID [--reason TEXT] [--yes]", help);
+        Assert.Contains("It never approves or rejects anything by itself", help);
+        Assert.All(help.Split('\n').Skip(1), line => Assert.True(line.Length <= 120, line));   // the usage line aside
     }
 
     [Fact]

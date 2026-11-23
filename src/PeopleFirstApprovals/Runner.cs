@@ -174,10 +174,12 @@ public static partial class Runner
         return decided;
     }
 
-    /// <summary>Approve or reject a claim, once. The claim is read first (already decided: nothing sent); "sending" is
-    /// recorded before the POST, so a run that dies mid-write never sends it again; then it's read back.
-    /// People First's web app approves by POSTing the claim itself to its approve (or reject) link, as this does.</summary>
-    public static int Decide(Config config, IPeopleFirst pf, string id, bool approve, string? reason, bool dryRun, CliHost host, JsonObject state, Action<string> log)
+    /// <summary>Approve or reject a claim, once. The claim is read first (already decided: nothing sent). A preview
+    /// (the default: anything but --yes) stops there: it prints the claim, what the checks find about it now, and what
+    /// would be sent, and writes nothing, here or in People First. Otherwise "sending" is recorded before the POST, so
+    /// a run that dies mid-write never sends it again; then it's read back. People First's web app approves by POSTing
+    /// the claim itself to its approve (or reject) link, as this does.</summary>
+    public static int Decide(Config config, IPeopleFirst pf, string id, bool approve, string? reason, bool preview, CliHost host, JsonObject state, Action<string> log)
     {
         var verb = approve ? "approve" : "reject";
         var (knownClaim, entry) = State.Find(state, id);
@@ -201,7 +203,7 @@ public static partial class Runner
         if (!claim.Awaiting)
         {
             host.Out.WriteLine($"The {who} is already {Claims.StateName(claim.State)}: nothing sent.");
-            if (!dryRun)
+            if (!preview)
             {
                 State.Claims(state)[claim.ClaimId] ??= new JsonObject { ["notification"] = claim.NotificationId, ["typed_path"] = claim.TypedPath };
                 Decided(config, state, claim.ClaimId, $"{Claims.StateName(claim.State)} in People First", host, log);
@@ -219,14 +221,14 @@ public static partial class Runner
         if (Claims.Whole(Claims.Record(typedRoot), "approvalState") is var latest && latest != Claims.AwaitingApproval)
         {
             host.Out.WriteLine($"The {who} has just become {Claims.StateName(latest)}: nothing sent.");
-            if (!dryRun)
+            if (!preview)
                 Decided(config, state, claim.ClaimId, $"{Claims.StateName(latest)} in People First", host, log);
             return 0;
         }
         var (url, body, headers) = Claims.Write(Claims.MetaLink(typedRoot, approve ? "approve" : "reject") ?? link, typedRoot, etag, claim.ClaimId);
-        if (dryRun)
+        if (preview)
         {
-            host.Out.WriteLine($"Would {verb} the {who} (POST {url.Split('?')[0]}, {(etag is null ? "no ETag" : "If-Match the record's ETag")}).");
+            Preview(config, pf, claim, approve, reason, url, etag, host, state, log);
             return 0;
         }
         var stateEntry = State.Claims(state)[claim.ClaimId] as JsonObject ?? new JsonObject();
@@ -285,6 +287,36 @@ public static partial class Runner
                 ["notification"] = claim.NotificationId,
             });
         return 1;
+    }
+
+    /// <summary>What approve or reject would do, without doing it: the claim (who, the kind, the amount and dates), what
+    /// the checks find about it now (as show does: a receipt already read isn't read again), what would be sent, and
+    /// how to do it. Nothing is written to People First, the state file or the review queue.</summary>
+    private static void Preview(Config config, IPeopleFirst pf, Claim claim, bool approve, string? reason, string url, string? etag,
+        CliHost host, JsonObject state, Action<string> log)
+    {
+        var (verb, done) = approve ? ("approve", "approved") : ("reject", "rejected");
+        var (path, problem) = Documents.Download(config, pf, claim);
+        DocumentFacts? facts = null;
+        if (path is not null)
+            (facts, problem) = Documents.Read(config, path, claim.ClaimId, host.Run);
+        var assessment = Checks.Assess(config, claim, facts, problem, DateOnly.FromDateTime(host.Now()));
+        if (path is not null && !Remembered(state, claim.ClaimId))
+            Documents.Delete(config, claim.ClaimId);
+        host.Out.WriteLine($"Would {verb} this claim:");
+        foreach (var line in Checks.Describe(claim, assessment))
+            host.Out.WriteLine("  " + line);
+        host.Out.WriteLine($"It would send People First the claim's own fields, once: POST {url.Split('?')[0]}"
+                           + $"{(etag is null ? " (no ETag)" : ", If-Match the record's ETag")}.");
+        if (!approve)
+        {
+            var person = claim.Person.Length > 0 ? claim.Person : "the claimant";
+            host.Out.WriteLine(reason is { Length: > 0 }
+                ? $"People First takes no reason, so none is sent with it: tell {person} yourself: {reason}"
+                : $"People First takes no reason, so none is sent with it: tell {person} yourself.");
+        }
+        host.Out.WriteLine($"Nothing {done}. Run again with --yes to {verb} it.");
+        log($"claim {claim.ClaimId}: {verb} previewed ({assessment.Recommendation}); nothing sent");
     }
 
     // ------------------------------------------------------------------------------------------------ the digest

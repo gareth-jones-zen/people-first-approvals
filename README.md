@@ -1,15 +1,18 @@
 # people-first-approvals
 
 Checks the claims [People First](https://www.mhrglobal.com/uk/en/people-first) (MHR's HR system) asks you to approve
-(long service awards, expenses, overtime), raises each one with a recommendation, and approves or rejects one when you
-say so. **It never approves anything by itself.**
+(long service awards, expenses, overtime) and raises each one with a recommendation. **It never approves or rejects
+anything by itself:** `approve` and `reject` show what they would do, and do it only when run again with `--yes`.
 
 ```
 people-first-approvals check [NOTIFICATION ...]   check these notifications' claims and raise each for review;
                                                   with none, re-read the claims still waiting (--dry-run)
 people-first-approvals show NOTIFICATION          check one and print it: raises and remembers nothing
-people-first-approvals approve ID                 approve a claim (its notification or claim id; --dry-run)
-people-first-approvals reject ID [--reason TEXT]  reject one (People First takes no reason: tell them yourself)
+people-first-approvals approve ID [--yes]         show what approving a claim (its notification or claim id)
+                                                  would do; --yes approves it
+people-first-approvals reject ID [--reason TEXT] [--yes]
+                                                  show what rejecting one would do; --yes rejects it (People
+                                                  First takes no reason: tell them yourself)
 people-first-approvals digest                     People First's daily email as JSON on standard input (a
                                                   mail-triage handler): its claims checked, the rest passed on
 people-first-approvals tidy                       delete documents older than keep_days
@@ -55,13 +58,32 @@ met a usage limit writes it later), so `check` again picks it up.
 
 **Each claim becomes one review item** (`[review]`, background-tools-lib's ReviewQueue; type `claim`): the title
 ("Long Service Awards claim: Alex Example, £180.00: Approve"), the recommendation and why, every check, the approve-by
-date, and the commands. Checked again, its item is replaced. **Items carry names, the claim's kind, amounts and dates:
+date, and the commands (`approve` and `reject` without `--yes`, so running one shows what it would do). Checked again, its item is replaced. **Items carry names, the claim's kind, amounts and dates:
 never an address or bank details**, though the receipt has them.
 
 ## Approving and rejecting
 
-`approve ID` or `reject ID` reads the claim first (already decided: nothing is sent), then does what People First's web
-app does: reads the claim again for its ETag, then POSTs the claim's fields (under its type, with its id; no links) to its
+**Without `--yes`, `approve ID` and `reject ID` only show what they would do**, and exit 0: the claim (who, its kind,
+the amount, when it was earned, the reason given), what the checks find about it now (as `show` does; a receipt already
+read isn't read again), the request that would be sent, for `reject` that People First takes no reason (so your
+`--reason` is yours to pass on), and then "Nothing approved. Run again with --yes to approve it." They write nothing:
+not to People First, the state file or the review queue. `--dry-run` is another name for this (`--yes` with it is an
+error).
+
+```
+Would approve this claim:
+  Long Service Awards claim for Alex Example: £247.52, earned 19 Nov 2026 (awaiting approval)
+    reason given: Long service award
+    ok: Document: invoice 42, from Made Up Supplies Ltd, 2026-11-16: total £247.52, the same as the claim
+    ok: Service: 10 years 5 months since 13 Jun 2016: the 10-year award, up to £250.00 (the next, 20 years, on 13 Jun 2036)
+    ok: Deadline: approve by Fri 27 Nov 2026 to be paid Mon 30 Nov 2026
+    recommendation: Approve (every check passed)
+It would send People First the claim's own fields, once: POST /payroll/personOnPayroll/…/approved, If-Match the record's ETag.
+Nothing approved. Run again with --yes to approve it.
+```
+
+**With `--yes`** it reads the claim first (already decided: nothing is sent), then does what People First's web app
+does: reads the claim again for its ETag, then POSTs the claim's fields (under its type, with its id; no links) to its
 `approve` (or `reject`) link with `annotate=t` and **`If-Match` set to that ETag**, once. Without If-Match People First
 refuses the write with 412 (fixed in 0.1.1). **A write that may have reached People First
 is never sent again:** "sending" is recorded before the POST; a timeout or a 5xx is read back, and if the claim doesn't
